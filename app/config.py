@@ -43,7 +43,7 @@ class Settings:
     enable_llm: bool = os.getenv("MEBOT_ENABLE_LLM", "0") == "1"
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
     openai_base_url: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-    openai_model: str = os.getenv("MEBOT_OPENAI_MODEL", "gpt-5")
+    openai_model: str = os.getenv("MEBOT_OPENAI_MODEL", "gpt-4o")
     openai_timeout_seconds: int = int(os.getenv("MEBOT_OPENAI_TIMEOUT", "120"))
 
 

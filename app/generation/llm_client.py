@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from socket import timeout as SocketTimeout
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -39,6 +40,10 @@ def generate_with_openai(instructions: str, prompt: str, settings: Settings) -> 
     try:
         with urlopen(request, timeout=settings.openai_timeout_seconds) as response:
             body = response.read().decode("utf-8")
+    except (TimeoutError, SocketTimeout) as exc:
+        raise LLMRequestError(
+            f"OpenAI API request timed out after {settings.openai_timeout_seconds}s"
+        ) from exc
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise LLMRequestError(f"OpenAI API request failed: {exc.code} {detail}") from exc
