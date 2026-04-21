@@ -24,10 +24,13 @@ class RetrievalConfig:
     lexical_weight: float = 0.35
     min_score_threshold: float = 0.22
     relative_score_floor: float = 0.45
-    keyword_weight: float = 0.2
-    title_match_weight: float = 0.35
+    keyword_weight: float = 0.08
+    title_match_weight: float = 0.12
     document_hit_weight: float = 0.08
-    title_coverage_weight: float = 0.7
+    title_coverage_weight: float = 0.18
+    doc_title_match_weight: float = 0.06
+    doc_title_coverage_weight: float = 0.09
+    doc_keyword_weight: float = 0.04
     max_chunks_per_document: int = 2
     chunk_diversity_threshold: float = 0.72
     lead_chunk_bonus: float = 0.18
@@ -388,9 +391,9 @@ def apply_document_level_bonus(results: list[RetrievalResult], query: str, confi
         keyword_bonus = max(keyword_overlap_score(query, item.title, item.text) for item in document_results)
         hit_bonus = min(len(document_results), 2) / 2
         total_bonus = (
-            config.title_match_weight * title_bonus
-            + config.title_coverage_weight * coverage_bonus
-            + config.keyword_weight * keyword_bonus
+            config.doc_title_match_weight * title_bonus
+            + config.doc_title_coverage_weight * coverage_bonus
+            + config.doc_keyword_weight * keyword_bonus
             + config.document_hit_weight * hit_bonus
         )
         for result in document_results:
