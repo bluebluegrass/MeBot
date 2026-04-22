@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -8,8 +9,56 @@ from app.config import SQLITE_PATH
 from app.db import connect, log_run
 from app.generation.draft_writer import generate_draft
 from app.generation.grounding import should_abstain
-from app.retrieval.hybrid import build_query_profile, retrieve, retrieve_documents
+from app.retrieval.hybrid import RetrievalConfig, build_query_profile, retrieve, retrieve_documents
 from app.services.source_formatter import format_source_block
+
+# Lenient config for the passage-review step — the user sees and curates results,
+# so we prefer recall over precision here.
+_REVIEW_CONFIG = RetrievalConfig(
+    semantic_limit=20,
+    lexical_limit=20,
+    final_limit=12,
+    min_score_threshold=0.05,
+    relative_score_floor=0.15,
+    document_relative_score_floor=0.35,
+    max_documents_for_prompt=10,
+    support_phrase_match_floor=0.05,
+    support_term_coverage_floor=0.05,
+)
+
+_INTENT_WITH_MATERIAL = re.compile(
+    r"^我[想要]用[^，,写]{1,40}写[^，,。.！!]{0,20}[，,]\s*",
+    re.UNICODE,
+)
+_INTENT_SIMPLE = re.compile(
+    r"^我[想要](?:写|起草|输出|生成|创作)(?:一[篇个段条则])?(?:关于|有关|讲|谈|说)?\s*",
+    re.UNICODE,
+)
+_SECONDARY_MARKER = re.compile(r"^主要[是写讲说]?[，,]?\s*", re.UNICODE)
+_INTRO_MARKER = re.compile(r"^(?:关于|讲|表达|描述)\s*", re.UNICODE)
+
+
+def _extract_retrieval_query(topic: str) -> str:
+    """Strip writing-intent boilerplate so retrieval focuses on the actual subject."""
+    text = topic.strip()
+
+    # "我想用[material]写[format]，[actual topic]"
+    match = _INTENT_WITH_MATERIAL.match(text)
+    if match:
+        remainder = text[match.end():]
+        remainder = _SECONDARY_MARKER.sub("", remainder)
+        remainder = _INTRO_MARKER.sub("", remainder).strip()
+        if len(remainder) >= 4:
+            return remainder
+
+    # "我想写一篇关于[actual topic]"
+    match = _INTENT_SIMPLE.match(text)
+    if match:
+        remainder = text[match.end():].strip()
+        if len(remainder) >= 4:
+            return remainder
+
+    return topic
 
 
 @dataclass
@@ -32,6 +81,54 @@ class DraftResponse:
     retrieval_summary: str
     prompt_context_preview: str
     adjacent_topics: list[str]
+
+
+def retrieve_for_review(topic: str) -> list[SourcePreview]:
+    """Step 1: retrieve passages for user to review and select."""
+    retrieval_query = _extract_retrieval_query(topic)
+    document_results = retrieve_documents(retrieval_query, max_chunks_per_document=3, config=_REVIEW_CONFIG)
+    if not document_results:
+        return []
+    return [
+        SourcePreview(
+            document_id=document.document_id,
+            title=document.title,
+            source_type=document.source_type,
+            date_published=document.date_published,
+            canonical_url=document.canonical_url,
+            excerpts=[build_excerpt(chunk.text, limit=500) for chunk in document.chunks],
+            score=document.score,
+        )
+        for document in document_results
+    ]
+
+
+def draft_from_selected(
+    topic: str, sources: list[SourcePreview], requested_format: str = "free-form"
+) -> DraftResponse:
+    """Step 2: generate draft from user-selected sources."""
+    if not sources:
+        return DraftResponse(
+            draft_text="没有选择任何来源，无法起草。",
+            source_count=0,
+            abstained=True,
+            sources=[],
+            retrieval_summary="No sources selected.",
+            prompt_context_preview="",
+            adjacent_topics=[],
+        )
+
+    prompt_context = build_prompt_context(sources)
+    draft = generate_draft(topic, prompt_context, requested_format)
+    return DraftResponse(
+        draft_text=draft,
+        source_count=len(sources),
+        abstained=False,
+        sources=sources,
+        retrieval_summary=f"distinct_documents={len(sources)} (user-selected)",
+        prompt_context_preview=prompt_context,
+        adjacent_topics=[],
+    )
 
 
 def topic_to_draft(topic: str, requested_format: str = "free-form") -> DraftResponse:
